@@ -8,6 +8,7 @@ from composio import Composio
 
 SLACK_TOOL_VERSION = "20251118_00"
 CALENDLY_TOOLKIT_VERSION = "20251111_01"
+ATTIO_TOOLKIT_VERSION = "20251202_01"
 supabase = create_client(os.environ["SUPABASE_PROJECT_URL"], os.environ["SUPABASE_API_KEY"])
 
 
@@ -28,6 +29,29 @@ def get_composio() -> Composio:
 @app.get("/")
 async def healthcheck():
     return {"status": "ok"}
+
+def get_mcp_server():
+    client = get_composio()
+    servers = client.mcp.list()["items"]
+
+    for server in servers:
+        if server.name == "crm-mcps":
+            return server
+
+    return client.mcp.create(
+        name="crm-mcps",
+        toolkits=[
+            {"toolkit": "attio", "auth_config": os.environ["ATTIO_AUTH_CONFIG_ID"]},
+            {"toolkit": "hubspot", "auth_config": os.environ["HUBSPOT_AUTH_CONFIG_ID"]},
+            {"toolkit": "notion", "auth_config": os.environ["NOTION_AUTH_CONFIG_ID"]}
+        ]
+    )
+
+@app.get("/app/mcp-info")
+async def mcp_info():
+    """Optional: View the MCP server URL"""
+    server = get_mcp_server()
+    return {"mcp_url": server.mcp_url}
 
 
 
@@ -192,3 +216,142 @@ async def instantly_webhook(payload: dict = Body(...)):
             },
         )
     print(result)
+
+@app.get("/api/attio_oauth_start")
+async def attio_oauth_start(request: Request):
+    client = get_composio()
+    user_id = request.query_params.get("user_id")
+
+    backend_base = os.getenv("BACKEND_BASE_URL")
+    callback_url = f"{backend_base}/api/attio_oauth_callback?user_id={user_id}"
+
+    connection_request = client.connected_accounts.link(
+        user_id=user_id,
+        auth_config_id=os.environ["ATTIO_AUTH_CONFIG_ID"],
+        callback_url=callback_url,
+    )
+
+    return {"redirect_url": connection_request.redirect_url}
+
+@app.get("/api/attio_oauth_callback")
+async def attio_oauth_callback(request: Request):
+    from fastapi.responses import RedirectResponse
+    user_id = request.query_params.get("user_id")
+    print(f"Attio connected for user: {user_id}")
+
+    # Test MCP with hardcoded prompt
+    result = await ai_action({
+        "user_id": user_id,
+        "prompt": "Add a user called John Smith and attatch a note saying meeting notes:meeting was canceled"
+    })
+    print(f"MCP Test Result: {result}")
+
+    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
+
+@app.post('/api/ai-action')
+async def ai_action(payload: dict = Body(...)):
+    """Send a prompt to Claude with Attio tools via MCP"""
+    from anthropic import Anthropic
+
+    user_id = payload.get("user_id")
+    prompt = payload.get("prompt")
+
+    server = get_mcp_server()
+    mcp_url = f"{server.mcp_url}?user_id={user_id}"
+
+    response = Anthropic().beta.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=4096,
+        system="You are a helpful assistant with access to Attio, HubSpot, and Notion. Use the tools without asking for confirmation.",
+        messages=[{"role": "user", "content": prompt}],
+        mcp_servers=[{"type": "url", "url": mcp_url, "name": "crm"}],
+        betas=["mcp-client-2025-04-04"]
+    )
+
+    return response
+    for block in response.content:
+        if hasattr(block, 'text'):
+            return {"result": block.text}
+    return {"result": "No text response"}
+
+@app.post('/api/create-attio-record')
+async def create_attio_record(payload: dict = Body(default={})):
+    client = get_composio()
+    record = payload.get("record", {})
+    user_id = record.get("user_id")
+
+    result = client.tools.execute(
+        slug="ATTIO_CREATE_RECORD",
+        user_id=user_id,
+        version=ATTIO_TOOLKIT_VERSION,
+        arguments={
+            "object_type": "people",
+            "values": {
+                "name": [{"first_name": "Test", "last_name": "Person", "full_name": "Test Person"}],
+                "email_addresses": [{"email_address": "test@example.com"}]
+            }
+        }
+    )
+    print("Attio result:", result)
+    return result
+
+@app.get("/api/hubspot_oauth_start")
+async def hubspot_oauth_start(request: Request):
+    client = get_composio()
+    user_id = request.query_params.get("user_id")
+
+    backend_base = os.getenv("BACKEND_BASE_URL")
+    callback_url = f"{backend_base}/api/hubspot_oauth_callback?user_id={user_id}"
+
+    connection_request = client.connected_accounts.link(
+        user_id=user_id,
+        auth_config_id=os.environ["HUBSPOT_AUTH_CONFIG_ID"],
+        callback_url=callback_url,
+    )
+
+    return {"redirect_url": connection_request.redirect_url}
+
+@app.get("/api/hubspot_oauth_callback")
+async def hubspot_oauth_callback(request: Request):
+    from fastapi.responses import RedirectResponse
+    user_id = request.query_params.get("user_id")
+    print(f"HubSpot connected for user: {user_id}")
+
+    result = await ai_action({
+        "user_id": user_id,
+        "prompt": "Create a contact for Essam Sleiman at essam@gmail.com in HubSpot"
+    })
+    print(f"MCP Test Result: {result}")
+
+    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
+
+@app.get("/api/notion_oauth_start")
+async def notion_oauth_start(request: Request):
+    client = get_composio()
+    user_id = request.query_params.get("user_id")
+
+    backend_base = os.getenv("BACKEND_BASE_URL")
+    callback_url = f"{backend_base}/api/notion_oauth_callback?user_id={user_id}"
+
+    connection_request = client.connected_accounts.link(
+        user_id=user_id,
+        auth_config_id=os.environ["NOTION_AUTH_CONFIG_ID"],
+        callback_url=callback_url,
+    )
+
+    return {"redirect_url": connection_request.redirect_url}
+
+@app.get("/api/notion_oauth_callback")
+async def notion_oauth_callback(request: Request):
+    from fastapi.responses import RedirectResponse
+    user_id = request.query_params.get("user_id")
+    print(f"Notion connected for user: {user_id}")
+
+    result = await ai_action({
+        "user_id": user_id,
+        "prompt": "Create a new note about astronomy in Notion"
+    })
+    print(f"MCP Test Result: {result}")
+
+    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
+

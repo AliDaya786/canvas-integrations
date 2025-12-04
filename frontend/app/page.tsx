@@ -53,6 +53,23 @@ export default function Page() {
     await supabase.from("users").update({ channel_id: channelId, message_format: messageFormat }).eq("name", userId);
   }
 
+  async function connectAttio() {
+    const res = await fetch(`${API_BASE}/api/attio_oauth_start?user_id=${userId}`);
+    const data = await res.json();
+    if (data.redirect_url) window.location.href = data.redirect_url;
+  }
+
+  async function connectHubspot() {
+    const res = await fetch(`${API_BASE}/api/hubspot_oauth_start?user_id=${userId}`);
+    const data = await res.json();
+    if (data.redirect_url) window.location.href = data.redirect_url;
+  }
+  async function connectNotion() {
+    const res = await fetch(`${API_BASE}/api/notion_oauth_start?user_id=${userId}`);
+    const data = await res.json();
+    if (data.redirect_url) window.location.href = data.redirect_url;
+  }
+
   if (!userId) {
     return (
       <main>
@@ -66,6 +83,9 @@ export default function Page() {
     <main>
       <button onClick={connectSlack}>Connect Slack</button>
       <button onClick={connectCalendly}>Connect Calendly</button>
+      <button onClick={connectAttio}>Connect Attio</button>
+      <button onClick={connectHubspot}>Connect Hubspot</button>
+      <button onClick={connectNotion}>Connect Notion</button>
       <br />
       <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
         {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
