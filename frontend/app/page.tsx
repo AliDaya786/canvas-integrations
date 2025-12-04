@@ -14,6 +14,8 @@ export default function Page() {
   const [channels, setChannels] = useState<{id: string, name: string}[]>([]);
   const [channelId, setChannelId] = useState("");
   const [messageFormat, setMessageFormat] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [aiResult, setAiResult] = useState("");
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("user_id");
@@ -37,14 +39,8 @@ export default function Page() {
     setUserId(name);
   }
 
-  async function connectSlack() {
-    const res = await fetch(`${API_BASE}/api/slack_oauth_start?user_id=${userId}`);
-    const data = await res.json();
-    if (data.redirect_url) window.location.href = data.redirect_url;
-  }
-
-  async function connectCalendly() {
-    const res = await fetch(`${API_BASE}/api/oauth_start?user_id=${userId}`);
+  async function connectTool(tool: string) {
+    const res = await fetch(`${API_BASE}/api/tool_oauth_start?user_id=${userId}&tool=${tool}`);
     const data = await res.json();
     if (data.redirect_url) window.location.href = data.redirect_url;
   }
@@ -53,21 +49,15 @@ export default function Page() {
     await supabase.from("users").update({ channel_id: channelId, message_format: messageFormat }).eq("name", userId);
   }
 
-  async function connectAttio() {
-    const res = await fetch(`${API_BASE}/api/attio_oauth_start?user_id=${userId}`);
+  async function runAI() {
+    setAiResult("Loading...");
+    const res = await fetch(`${API_BASE}/api/ai-action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: userId, prompt: prompt })
+    });
     const data = await res.json();
-    if (data.redirect_url) window.location.href = data.redirect_url;
-  }
-
-  async function connectHubspot() {
-    const res = await fetch(`${API_BASE}/api/hubspot_oauth_start?user_id=${userId}`);
-    const data = await res.json();
-    if (data.redirect_url) window.location.href = data.redirect_url;
-  }
-  async function connectNotion() {
-    const res = await fetch(`${API_BASE}/api/notion_oauth_start?user_id=${userId}`);
-    const data = await res.json();
-    if (data.redirect_url) window.location.href = data.redirect_url;
+    setAiResult(JSON.stringify(data, null, 2));
   }
 
   if (!userId) {
@@ -81,11 +71,11 @@ export default function Page() {
 
   return (
     <main>
-      <button onClick={connectSlack}>Connect Slack</button>
-      <button onClick={connectCalendly}>Connect Calendly</button>
-      <button onClick={connectAttio}>Connect Attio</button>
-      <button onClick={connectHubspot}>Connect Hubspot</button>
-      <button onClick={connectNotion}>Connect Notion</button>
+      <button onClick={() => connectTool("slack")}>Connect Slack</button>
+      <button onClick={() => connectTool("calendly")}>Connect Calendly</button>
+      <button onClick={() => connectTool("attio")}>Connect Attio</button>
+      <button onClick={() => connectTool("hubspot")}>Connect Hubspot</button>
+      <button onClick={() => connectTool("notion")}>Connect Notion</button>
       <br />
       <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
         {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -94,6 +84,16 @@ export default function Page() {
       <textarea value={messageFormat} onChange={(e) => setMessageFormat(e.target.value)} />
       <br />
       <button onClick={saveSettings}>Save Settings</button>
+      <br />
+      <br />
+      <input
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Enter prompt"
+      />
+      <button onClick={runAI}>Run AI</button>
+      <br />
+      <pre>{aiResult}</pre>
     </main>
   );
 }

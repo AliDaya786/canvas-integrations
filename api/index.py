@@ -8,9 +8,7 @@ from composio import Composio
 
 SLACK_TOOL_VERSION = "20251118_00"
 CALENDLY_TOOLKIT_VERSION = "20251111_01"
-ATTIO_TOOLKIT_VERSION = "20251202_01"
 supabase = create_client(os.environ["SUPABASE_PROJECT_URL"], os.environ["SUPABASE_API_KEY"])
-
 
 app = FastAPI()
 
@@ -47,32 +45,43 @@ def get_mcp_server():
         ]
     )
 
-@app.get("/app/mcp-info")
-async def mcp_info():
-    """Optional: View the MCP server URL"""
-    server = get_mcp_server()
-    return {"mcp_url": server.mcp_url}
+TOOL_AUTH_CONFIGS = {
+    "slack": "SLACK_AUTH_CONFIG_ID",
+    "calendly": "CALENDLY_AUTH_CONFIG_ID",
+    "instantly": "INSTANTLY_AUTH_CONFIG_ID",
+    "attio": "ATTIO_AUTH_CONFIG_ID",
+    "hubspot": "HUBSPOT_AUTH_CONFIG_ID",
+    "notion": "NOTION_AUTH_CONFIG_ID",
+}
 
-
-
-@app.get("/api/oauth_start")
-async def oauth_start(request: Request):
+@app.get("/api/tool_oauth_start")
+async def tool_oauth_start(request: Request):
     client = get_composio()
     user_id = request.query_params.get("user_id")
+    tool = request.query_params.get("tool")  
 
+    auth_config_id = os.environ[TOOL_AUTH_CONFIGS[tool]]
     backend_base = os.getenv("BACKEND_BASE_URL")
-    callback_url = f"{backend_base}/api/oauth_callback?user_id={user_id}"
+    callback_url = f"{backend_base}/api/tool_oauth_callback?user_id={user_id}&tool={tool}"
 
     connection_request = client.connected_accounts.link(
         user_id=user_id,
-        auth_config_id=os.environ["CALENDLY_AUTH_CONFIG_ID"],
+        auth_config_id=auth_config_id,
         callback_url=callback_url,
     )
-
     return {"redirect_url": connection_request.redirect_url}
 
-@app.get("/api/oauth_callback")
-async def oauth_callback(request: Request):
+@app.get("/api/tool_oauth_callback")
+async def tool_oauth_callback(request: Request):
+    from fastapi.responses import RedirectResponse
+    user_id = request.query_params.get("user_id")
+    tool = request.query_params.get("tool")
+    print(f"{tool} connected for user: {user_id}")
+
+    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
+
+@app.get("/api/calendly-webhook")
+async def calendly_webhook(request: Request):
     from fastapi.responses import RedirectResponse
     user_id = request.query_params.get("user_id")
     client = get_composio()
@@ -105,42 +114,6 @@ async def oauth_callback(request: Request):
 
     return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
 
-@app.get("/api/slack_oauth_start")
-async def slack_oauth_start(request: Request):
-    client = get_composio()
-    user_id = request.query_params.get("user_id")
-
-    backend_base = os.getenv("BACKEND_BASE_URL")
-    callback_url = f"{backend_base}/api/slack_oauth_callback?user_id={user_id}"
-
-    connection_request = client.connected_accounts.link(
-        user_id=user_id,
-        auth_config_id=os.environ["SLACK_AUTH_CONFIG_ID"],
-        callback_url=callback_url,
-    )
-
-    return {"redirect_url": connection_request.redirect_url}
-
-@app.get("/api/slack_oauth_callback")
-async def slack_oauth_callback(request: Request):
-    from fastapi.responses import RedirectResponse
-    user_id = request.query_params.get("user_id")
-    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
-
-@app.get("/api/slack_channels")
-async def slack_channels(request: Request):
-    user_id = request.query_params.get("user_id")
-    client = get_composio()
-    result = client.tools.execute(
-        slug="SLACK_LIST_ALL_CHANNELS",
-        user_id=user_id,
-        version="20251126_02",
-        arguments={"limit": 100, "types": "public_channel,private_channel,im,mpim"},
-    )
-    channels = result.get("data", {}).get("channels", [])
-    return [{"id": c["id"], "name": c.get("name") or c.get("user") or c["id"]} for c in channels]
-
-
 @app.post('/calendly-webhook')
 async def calendly_webhook(request: Request, payload: dict = Body(...)):
     user_id = request.query_params.get("user_id")
@@ -158,6 +131,18 @@ async def calendly_webhook(request: Request, payload: dict = Body(...)):
         "reschedule_url": invitee.get("reschedule_url"),
     }).execute()
 
+@app.get("/api/slack_channels")
+async def slack_channels(request: Request):
+    user_id = request.query_params.get("user_id")
+    client = get_composio()
+    result = client.tools.execute(
+        slug="SLACK_LIST_ALL_CHANNELS",
+        user_id=user_id,
+        version="20251126_02",
+        arguments={"limit": 100, "types": "public_channel,private_channel,im,mpim"},
+    )
+    channels = result.get("data", {}).get("channels", [])
+    return [{"id": c["id"], "name": c.get("name") or c.get("user") or c["id"]} for c in channels]
 
 @app.post('/api/send-slack')
 async def send_slack(payload: dict = Body(...)):
@@ -184,70 +169,6 @@ async def send_slack(payload: dict = Body(...)):
     )
     return {"status": "sent"}
 
-
-@app.post("/instantly-webhook")
-async def instantly_webhook(payload: dict = Body(...)):
-    composio = get_composio()
-
-    data = payload
-    campaign_name = data["campaign_name"]
-    lead_email = data["lead_email"]
-    reply_msg = data["reply_text_snippet"]
-    link = data["unibox_url"]
-    domain = lead_email.split("@")[1]
-    company_name = domain.split(".")[0]
-
-    text = (
-        f"New email reply received!\n\n"
-        f"Campaign: {campaign_name}\n"
-        f"Company: {company_name}\n"
-        f"Lead: {lead_email}\n"
-        f"Reply message:\n{reply_msg}\n"
-        f"Open in Instantly: {link}"
-            )
-
-    result = composio.tools.execute(
-            slug="SLACK_SEND_MESSAGE",
-            user_id=SLACK_USER_ID,
-            version=SLACK_TOOL_VERSION,
-            arguments={
-                "channel": CHANNEL_ID,
-                "text": text,
-            },
-        )
-    print(result)
-
-@app.get("/api/attio_oauth_start")
-async def attio_oauth_start(request: Request):
-    client = get_composio()
-    user_id = request.query_params.get("user_id")
-
-    backend_base = os.getenv("BACKEND_BASE_URL")
-    callback_url = f"{backend_base}/api/attio_oauth_callback?user_id={user_id}"
-
-    connection_request = client.connected_accounts.link(
-        user_id=user_id,
-        auth_config_id=os.environ["ATTIO_AUTH_CONFIG_ID"],
-        callback_url=callback_url,
-    )
-
-    return {"redirect_url": connection_request.redirect_url}
-
-@app.get("/api/attio_oauth_callback")
-async def attio_oauth_callback(request: Request):
-    from fastapi.responses import RedirectResponse
-    user_id = request.query_params.get("user_id")
-    print(f"Attio connected for user: {user_id}")
-
-    # Test MCP with hardcoded prompt
-    result = await ai_action({
-        "user_id": user_id,
-        "prompt": "Add a user called John Smith and attatch a note saying meeting notes:meeting was canceled"
-    })
-    print(f"MCP Test Result: {result}")
-
-    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
-
 @app.post('/api/ai-action')
 async def ai_action(payload: dict = Body(...)):
     """Send a prompt to Claude with Attio tools via MCP"""
@@ -268,90 +189,12 @@ async def ai_action(payload: dict = Body(...)):
         betas=["mcp-client-2025-04-04"]
     )
 
-    return response
+    print(response)
     for block in response.content:
         if hasattr(block, 'text'):
             return {"result": block.text}
     return {"result": "No text response"}
 
-@app.post('/api/create-attio-record')
-async def create_attio_record(payload: dict = Body(default={})):
-    client = get_composio()
-    record = payload.get("record", {})
-    user_id = record.get("user_id")
 
-    result = client.tools.execute(
-        slug="ATTIO_CREATE_RECORD",
-        user_id=user_id,
-        version=ATTIO_TOOLKIT_VERSION,
-        arguments={
-            "object_type": "people",
-            "values": {
-                "name": [{"first_name": "Test", "last_name": "Person", "full_name": "Test Person"}],
-                "email_addresses": [{"email_address": "test@example.com"}]
-            }
-        }
-    )
-    print("Attio result:", result)
-    return result
 
-@app.get("/api/hubspot_oauth_start")
-async def hubspot_oauth_start(request: Request):
-    client = get_composio()
-    user_id = request.query_params.get("user_id")
-
-    backend_base = os.getenv("BACKEND_BASE_URL")
-    callback_url = f"{backend_base}/api/hubspot_oauth_callback?user_id={user_id}"
-
-    connection_request = client.connected_accounts.link(
-        user_id=user_id,
-        auth_config_id=os.environ["HUBSPOT_AUTH_CONFIG_ID"],
-        callback_url=callback_url,
-    )
-
-    return {"redirect_url": connection_request.redirect_url}
-
-@app.get("/api/hubspot_oauth_callback")
-async def hubspot_oauth_callback(request: Request):
-    from fastapi.responses import RedirectResponse
-    user_id = request.query_params.get("user_id")
-    print(f"HubSpot connected for user: {user_id}")
-
-    result = await ai_action({
-        "user_id": user_id,
-        "prompt": "Create a contact for Essam Sleiman at essam@gmail.com in HubSpot"
-    })
-    print(f"MCP Test Result: {result}")
-
-    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
-
-@app.get("/api/notion_oauth_start")
-async def notion_oauth_start(request: Request):
-    client = get_composio()
-    user_id = request.query_params.get("user_id")
-
-    backend_base = os.getenv("BACKEND_BASE_URL")
-    callback_url = f"{backend_base}/api/notion_oauth_callback?user_id={user_id}"
-
-    connection_request = client.connected_accounts.link(
-        user_id=user_id,
-        auth_config_id=os.environ["NOTION_AUTH_CONFIG_ID"],
-        callback_url=callback_url,
-    )
-
-    return {"redirect_url": connection_request.redirect_url}
-
-@app.get("/api/notion_oauth_callback")
-async def notion_oauth_callback(request: Request):
-    from fastapi.responses import RedirectResponse
-    user_id = request.query_params.get("user_id")
-    print(f"Notion connected for user: {user_id}")
-
-    result = await ai_action({
-        "user_id": user_id,
-        "prompt": "Create a new note about astronomy in Notion"
-    })
-    print(f"MCP Test Result: {result}")
-
-    return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
 
