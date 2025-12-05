@@ -76,6 +76,8 @@ export default function Page() {
       <button onClick={() => connectTool("attio")}>Connect Attio</button>
       <button onClick={() => connectTool("hubspot")}>Connect Hubspot</button>
       <button onClick={() => connectTool("notion")}>Connect Notion</button>
+      <button onClick={() => connectTool("gmail")}>Connect Gmail</button>
+      <button onClick={() => connectTool("gcalendar")}>Connect GCalendar</button>
       <br />
       <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
         {channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}

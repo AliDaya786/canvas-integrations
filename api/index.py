@@ -33,15 +33,17 @@ def get_mcp_server():
     servers = client.mcp.list()["items"]
 
     for server in servers:
-        if server.name == "crm-mcps":
+        if server.name == "mcps":
             return server
 
     return client.mcp.create(
-        name="crm-mcps",
+        name="mcps",
         toolkits=[
             {"toolkit": "attio", "auth_config": os.environ["ATTIO_AUTH_CONFIG_ID"]},
             {"toolkit": "hubspot", "auth_config": os.environ["HUBSPOT_AUTH_CONFIG_ID"]},
-            {"toolkit": "notion", "auth_config": os.environ["NOTION_AUTH_CONFIG_ID"]}
+            {"toolkit": "notion", "auth_config": os.environ["NOTION_AUTH_CONFIG_ID"]},
+            {"toolkit": "gmail", "auth_config": os.environ["GMAIL_AUTH_CONFIG_ID"]},
+            {"toolkit": "googlecalendar", "auth_config": os.environ["GCALENDAR_AUTH_CONFIG_ID"]}
         ]
     )
 
@@ -52,6 +54,8 @@ TOOL_AUTH_CONFIGS = {
     "attio": "ATTIO_AUTH_CONFIG_ID",
     "hubspot": "HUBSPOT_AUTH_CONFIG_ID",
     "notion": "NOTION_AUTH_CONFIG_ID",
+    "gmail": "GMAIL_AUTH_CONFIG_ID",
+    "gcalendar" : "GCALENDAR_AUTH_CONFIG_ID",
 }
 
 @app.get("/api/tool_oauth_start")
@@ -173,9 +177,11 @@ async def send_slack(payload: dict = Body(...)):
 async def ai_action(payload: dict = Body(...)):
     """Send a prompt to Claude with Attio tools via MCP"""
     from anthropic import Anthropic
+    from datetime import date
 
     user_id = payload.get("user_id")
     prompt = payload.get("prompt")
+    today = date.today()
 
     server = get_mcp_server()
     mcp_url = f"{server.mcp_url}?user_id={user_id}"
@@ -183,14 +189,14 @@ async def ai_action(payload: dict = Body(...)):
     response = Anthropic().beta.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=4096,
-        system="You are a helpful assistant with access to Attio, HubSpot, and Notion. Use the tools without asking for confirmation.",
+        system=f"You are a helpful assistant with access to Attio, HubSpot, Notion, Gmail, and Google Calendar. Use the tools without asking for confirmation. If you don't have access to a requested tool, let the user know. Today's date is {today}.",
         messages=[{"role": "user", "content": prompt}],
         mcp_servers=[{"type": "url", "url": mcp_url, "name": "crm"}],
         betas=["mcp-client-2025-04-04"]
     )
 
-    print(response)
-    for block in response.content:
+    print(response.content)
+    for block in reversed(response.content):
         if hasattr(block, 'text'):
             return {"result": block.text}
     return {"result": "No text response"}
