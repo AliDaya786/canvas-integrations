@@ -18,34 +18,52 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["x-vercel-ai-ui-message-stream"],
 )
 
 def get_composio() -> Composio:
     return Composio()
 
-
-@app.get("/")
-async def healthcheck():
-    return {"status": "ok"}
+_mcp_server_cache = None
 
 def get_mcp_server():
+    global _mcp_server_cache
+    if _mcp_server_cache is not None:
+        return _mcp_server_cache
+
     client = get_composio()
     servers = client.mcp.list()["items"]
 
     for server in servers:
-        if server.name == "mcps":
-            return server
+        if server.name == "mcps-v4":
+            _mcp_server_cache = server
+            return _mcp_server_cache
 
-    return client.mcp.create(
-        name="mcps",
+    _mcp_server_cache = client.mcp.create(
+        name="mcps-v4",
         toolkits=[
+            {"toolkit": "composio"},
+            {"toolkit": "gmail", "auth_config": os.environ["GMAIL_AUTH_CONFIG_ID"]},
+            {"toolkit": "googlecalendar", "auth_config": os.environ["GCALENDAR_AUTH_CONFIG_ID"]},
             {"toolkit": "attio", "auth_config": os.environ["ATTIO_AUTH_CONFIG_ID"]},
             {"toolkit": "hubspot", "auth_config": os.environ["HUBSPOT_AUTH_CONFIG_ID"]},
             {"toolkit": "notion", "auth_config": os.environ["NOTION_AUTH_CONFIG_ID"]},
-            {"toolkit": "gmail", "auth_config": os.environ["GMAIL_AUTH_CONFIG_ID"]},
-            {"toolkit": "googlecalendar", "auth_config": os.environ["GCALENDAR_AUTH_CONFIG_ID"]}
+        ],
+        allowed_tools=[
+            "COMPOSIO_MULTI_EXECUTE_TOOL",
+            "GMAIL_FETCH_EMAILS", "GMAIL_REPLY_TO_THREAD", "GMAIL_CREATE_EMAIL_DRAFT", "GMAIL_SEND_DRAFT",
+            "GOOGLECALENDAR_CREATE_EVENT", "GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_DELETE_EVENT", "GOOGLECALENDAR_UPDATE_EVENT",
+            "ATTIO_CREATE_RECORD", "ATTIO_FIND_RECORD", "ATTIO_UPDATE_RECORD", "ATTIO_DELETE_RECORD", "ATTIO_LIST_RECORDS",
+            "HUBSPOT_CREATE_CONTACT", "HUBSPOT_UPDATE_CONTACT", "HUBSPOT_LIST_CONTACTS", "HUBSPOT_CREATE_COMPANY", "HUBSPOT_UPDATE_COMPANY", "HUBSPOT_LIST_COMPANIES",
+            "NOTION_CREATE_NOTION_PAGE", "NOTION_FETCH_DATA", "NOTION_INSERT_ROW_DATABASE", "NOTION_ARCHIVE_NOTION_PAGE", "NOTION_ADD_MULTIPLE_PAGE_CONTENT",
         ]
     )
+    return _mcp_server_cache
+
+
+@app.get("/")
+async def healthcheck():
+    return {"status": "ok"}
 
 TOOL_AUTH_CONFIGS = {
     "slack": "SLACK_AUTH_CONFIG_ID",
@@ -85,7 +103,7 @@ async def tool_oauth_callback(request: Request):
     return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
 
 @app.get("/api/calendly-webhook")
-async def calendly_webhook(request: Request):
+async def calendly_webhook_setup(request: Request):
     from fastapi.responses import RedirectResponse
     user_id = request.query_params.get("user_id")
     client = get_composio()
@@ -119,7 +137,7 @@ async def calendly_webhook(request: Request):
     return RedirectResponse(url=f"https://frontend-three-psi-61.vercel.app?user_id={user_id}")
 
 @app.post('/calendly-webhook')
-async def calendly_webhook(request: Request, payload: dict = Body(...)):
+async def calendly_webhook_handler(request: Request, payload: dict = Body(...)):
     user_id = request.query_params.get("user_id")
     invitee = payload.get("payload", {})
     scheduled_event = invitee.get("scheduled_event", {})
@@ -173,33 +191,56 @@ async def send_slack(payload: dict = Body(...)):
     )
     return {"status": "sent"}
 
-@app.post('/api/ai-action')
-async def ai_action(payload: dict = Body(...)):
-    """Send a prompt to Claude with Attio tools via MCP"""
+@app.post('/api/chat')
+async def chat(payload: dict = Body(...)):
     from anthropic import Anthropic
     from datetime import date
+    from fastapi.responses import StreamingResponse
+    import json
+    import uuid
 
     user_id = payload.get("user_id")
-    prompt = payload.get("prompt")
+    messages = [{"role": m["role"], "content": "".join(p["text"] for p in m.get("parts", []) if p.get("type") == "text")} for m in payload.get("messages", [])]
     today = date.today()
+    mcp_url = f"{get_mcp_server().mcp_url}?user_id={user_id}"
+    print(f"Messages: {messages}")
 
-    server = get_mcp_server()
-    mcp_url = f"{server.mcp_url}?user_id={user_id}"
-
-    response = Anthropic().beta.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=4096,
-        system=f"You are a helpful assistant with access to Attio, HubSpot, Notion, Gmail, and Google Calendar. Use the tools without asking for confirmation. If you don't have access to a requested tool, let the user know. Today's date is {today}.",
-        messages=[{"role": "user", "content": prompt}],
-        mcp_servers=[{"type": "url", "url": mcp_url, "name": "crm"}],
-        betas=["mcp-client-2025-04-04"]
-    )
-
-    print(response.content)
+    import time
+    start = time.time()
+    try:
+        response = Anthropic().beta.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=4096,
+            system=f"Today: {today}. Be concise.",
+            messages=messages,
+            mcp_servers=[{"type": "url", "url": mcp_url, "name": "crm"}],
+            betas=["mcp-client-2025-04-04"]
+        )
+        print(f"MCP call: {time.time() - start:.1f}s")
+        print(response)
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
+    result = "No response"
     for block in reversed(response.content):
         if hasattr(block, 'text'):
-            return {"result": block.text}
-    return {"result": "No text response"}
+            result = block.text
+            break
+
+    msg_id = str(uuid.uuid4())
+    chunks = [
+        f'data: {json.dumps({"type":"start","messageId":msg_id})}\n\n',
+        f'data: {json.dumps({"type":"text-start","id":msg_id})}\n\n',
+        f'data: {json.dumps({"type":"text-delta","id":msg_id,"delta":result})}\n\n',
+        f'data: {json.dumps({"type":"text-end","id":msg_id})}\n\n',
+        f'data: {json.dumps({"type":"finish"})}\n\n',
+        'data: [DONE]\n\n',
+    ]
+    return StreamingResponse(
+        iter(chunks),
+        media_type="text/event-stream",
+        headers={"x-vercel-ai-ui-message-stream": "v1"}
+    )
 
 
 

@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
 const supabase = createClient(
@@ -8,14 +10,26 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_API_KEY!
 );
 
+function Chat({ userId }: { userId: string }) {
+  const [input, setInput] = useState("");
+  const { messages, sendMessage } = useChat({
+    transport: new DefaultChatTransport({ api: `${API_BASE}/api/chat`, body: { user_id: userId } }),
+  });
+  return (
+    <>
+      {messages.map(m => <div key={m.id}>{m.role}: {m.parts.map(p => p.type === "text" ? p.text : "").join("")}</div>)}
+      <input value={input} onChange={e => setInput(e.target.value)} />
+      <button onClick={() => { sendMessage({ text: input }); setInput(""); }}>Send</button>
+    </>
+  );
+}
+
 export default function Page() {
   const [name, setName] = useState("");
   const [userId, setUserId] = useState("");
   const [channels, setChannels] = useState<{id: string, name: string}[]>([]);
   const [channelId, setChannelId] = useState("");
   const [messageFormat, setMessageFormat] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [aiResult, setAiResult] = useState("");
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("user_id");
@@ -49,17 +63,6 @@ export default function Page() {
     await supabase.from("users").update({ channel_id: channelId, message_format: messageFormat }).eq("name", userId);
   }
 
-  async function runAI() {
-    setAiResult("Loading...");
-    const res = await fetch(`${API_BASE}/api/ai-action`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, prompt: prompt })
-    });
-    const data = await res.json();
-    setAiResult(JSON.stringify(data, null, 2));
-  }
-
   if (!userId) {
     return (
       <main>
@@ -87,15 +90,7 @@ export default function Page() {
       <br />
       <button onClick={saveSettings}>Save Settings</button>
       <br />
-      <br />
-      <input
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Enter prompt"
-      />
-      <button onClick={runAI}>Run AI</button>
-      <br />
-      <pre>{aiResult}</pre>
+      <Chat userId={userId} />
     </main>
   );
 }
